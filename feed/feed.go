@@ -26,26 +26,18 @@ func GetURLs(urlfile string) ([]string, error) {
 	return feeds, nil
 }
 
-func parseFeed(feed []byte) (Feed, error) {
+func parseFeed(b []byte) (Feed, error) {
 	var feedR RSS
+	err := xml.Unmarshal(b, &feedR)
+	if err == nil {
+		return feedR, nil
+	}
 	var feedA Atom
-	err := xml.Unmarshal(feed, &feedR)
-	if err != nil {
-		err = xml.Unmarshal(feed, &feedA)
-		if err != nil {
-			return nil, err
-		}
+	err = xml.Unmarshal(b, &feedA)
+	if err == nil {
 		return feedA, nil
 	}
-	return feedR, nil
-}
-
-func readLocalFeed(path string) ([]byte, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return []byte{}, err
-	}
-	return b, nil
+	return nil, err
 }
 
 func getRemoteFeed(url string) ([]byte, error) {
@@ -66,27 +58,29 @@ func getRemoteFeed(url string) ([]byte, error) {
 	return body, nil
 }
 
-func processFeed(url string) (Feed, error) {
-	var f Feed
+func processFeed(url string, index int, c chan FeedMessage) {
 	b, err := getRemoteFeed(url)
 	if err != nil {
-		return f, err
+		c <- FeedMessage{Feed: nil, Error: err, Index: index}
+		return
 	}
-	feed, err := parseFeed(b)
+	f, err := parseFeed(b)
 	if err != nil {
-		return f, err
+		c <- FeedMessage{Feed: nil, Error: err, Index: index}
+		return
 	}
-	return feed, nil
+	c <- FeedMessage{Feed: &f, Error: nil, Index: index}
+	return
 }
 
-func GetFeeds(urls []string, c chan Feed) error {
-	for _, url := range urls {
-		go func() {
-			f, err := processFeed(url)
-			if err != nil {
-				return err
-			}
-			c <- feed
-		}()
+type FeedMessage struct {
+	Feed  *Feed
+	Error error
+	Index int
+}
+
+func GetFeeds(urls []string, c chan FeedMessage) {
+	for i, url := range urls {
+		go processFeed(url, i, c)
 	}
 }

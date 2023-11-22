@@ -9,8 +9,12 @@ import (
 )
 
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Printf("usage: %s <url-file>\n", os.Args[0])
+		os.Exit(1)
+	}
 	path := os.Args[1]
-	u, err := feed.GetURLs(path)
+	urls, err := feed.GetURLs(path)
 	if err != nil {
 		fmt.Printf("error: %s\n", err)
 		os.Exit(1)
