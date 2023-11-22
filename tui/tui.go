@@ -8,10 +8,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hhakk/gross/feed"
+	"github.com/muesli/reflow/wordwrap"
+	"github.com/muesli/reflow/wrap"
 )
 
-var docStyle = lipgloss.NewStyle().Margin(1, 2, 1, 2)
-var pageStyle = lipgloss.NewStyle().Width(20).Inherit(docStyle)
+var docStyle = lipgloss.NewStyle().Margin(4, 8)
 
 type sessionState uint
 
@@ -30,6 +31,8 @@ type mainModel struct {
 	singleItem   viewport.Model
 	selectedFeed feed.Feed
 	selectedItem feed.Item
+	contentReady bool
+	width        int
 }
 
 type ListItem struct {
@@ -40,14 +43,6 @@ type ListItem struct {
 func (l ListItem) FilterValue() string { return l.title }
 func (l ListItem) Title() string       { return l.title }
 func (l ListItem) Description() string { return l.description }
-
-func formatContent(item feed.Item) string {
-	return pageStyle.Render(fmt.Sprintf(
-		`---%s---
-Link: %s
----
-%s`, item.Title(), item.Link(), item.Content()))
-}
 
 func newMainModel(urls []string) mainModel {
 	w := 0
@@ -60,12 +55,13 @@ func newMainModel(urls []string) mainModel {
 	allFeedList.Title = "gross | feeds"
 	singleFeedList := list.New([]list.Item{}, list.NewDefaultDelegate(), w, h)
 	return mainModel{
-		URLs:       urls,
-		fc:         make(chan feed.FeedMessage),
-		state:      allFeedsView,
-		allFeeds:   allFeedList,
-		singleFeed: singleFeedList,
-		singleItem: viewport.New(w, h),
+		URLs:         urls,
+		fc:           make(chan feed.FeedMessage),
+		state:        allFeedsView,
+		allFeeds:     allFeedList,
+		singleFeed:   singleFeedList,
+		singleItem:   viewport.New(w, h),
+		selectedItem: nil,
 	}
 }
 
@@ -85,16 +81,38 @@ func (m mainModel) Init() tea.Cmd {
 	return tea.Batch(sender, receiveFeeds(m.fc))
 }
 
+func formatContent(item feed.Item, width int) string {
+	ls := list.DefaultStyles()
+	return fmt.Sprintf("%s\n\n%s\n\n%s",
+		ls.Title.Render(fmt.Sprintf("gross | %s", item.Title())),
+		ls.StatusBar.Render(
+			wrap.String(
+				fmt.Sprintf("Link: %s", item.Link()),
+				width,
+			),
+		),
+		wordwrap.String(item.Content(), width),
+	)
+}
+
 func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
+	width := 0
+	height := 0
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		h, v := docStyle.GetFrameSize()
-		m.allFeeds.SetSize(msg.Width-h, msg.Height-v)
-		m.singleFeed.SetSize(msg.Width-h, msg.Height-v)
-		m.singleItem.Width = msg.Width - h
-		m.singleItem.Height = msg.Height - v
+		width = msg.Width - h
+		m.width = width
+		height = msg.Height - v
+		m.allFeeds.SetSize(width, height)
+		m.singleFeed.SetSize(width, height)
+		m.singleItem.Width = width
+		m.singleItem.Height = height
+		if m.selectedItem != nil {
+			m.singleItem.SetContent(formatContent(m.selectedItem, m.width))
+		}
 	case tea.KeyMsg:
 		switch msg.String() {
 		// these keys quit the program
@@ -130,7 +148,7 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				i, ok := m.singleFeed.SelectedItem().(feed.Item)
 				if ok {
 					m.selectedItem = i
-					m.singleItem.SetContent(formatContent(i))
+					m.singleItem.SetContent(formatContent(i, m.width))
 					m.state = singleItemView
 				}
 			}
@@ -154,7 +172,13 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, receiveFeeds(m.fc))
 		// on error, we show errored output
 		if msg.Error != nil {
-			cmd = m.allFeeds.SetItem(msg.Index, ListItem{title: "Error", description: fmt.Sprintf("Error: %s", msg.Error)})
+			cmd = m.allFeeds.SetItem(
+				msg.Index,
+				ListItem{
+					title:       "Error",
+					description: fmt.Sprintf("Error: %s", msg.Error),
+				},
+			)
 		} else {
 			// otherwise, we show the item
 			cmd = m.allFeeds.SetItem(msg.Index, *msg.Feed)

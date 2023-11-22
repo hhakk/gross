@@ -1,6 +1,12 @@
 package feed
 
-import "encoding/xml"
+import (
+	"encoding/xml"
+
+	"github.com/microcosm-cc/bluemonday"
+)
+
+var p = bluemonday.StrictPolicy()
 
 type RSSItem struct {
 	XTitle       string `xml:"title"`
@@ -70,7 +76,7 @@ func (i RSSItem) Link() string {
 }
 
 func (i RSSItem) Content() string {
-	return i.XDescription
+	return p.Sanitize(i.XDescription)
 }
 
 func (a AtomEntry) FilterValue() string {
@@ -90,7 +96,7 @@ func (a AtomEntry) Description() string {
 }
 
 func (a AtomEntry) Content() string {
-	return a.XSummary
+	return p.Sanitize(a.XSummary)
 }
 
 func (r RSS) FilterValue() string {
