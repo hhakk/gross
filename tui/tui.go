@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"io"
+	"os/exec"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -10,6 +12,7 @@ import (
 	"github.com/hhakk/gross/feed"
 	"github.com/muesli/reflow/wordwrap"
 	"github.com/muesli/reflow/wrap"
+	"github.com/spf13/viper"
 )
 
 var docStyle = lipgloss.NewStyle().Margin(4, 8)
@@ -33,6 +36,7 @@ type mainModel struct {
 	selectedItem feed.Item
 	contentReady bool
 	width        int
+	showRead     bool
 }
 
 type ListItem struct {
@@ -44,6 +48,48 @@ func (l ListItem) FilterValue() string { return l.title }
 func (l ListItem) Title() string       { return l.title }
 func (l ListItem) Description() string { return l.description }
 
+type itemDelegate struct{}
+
+func (d itemDelegate) Height() int                             { return 2 }
+func (d itemDelegate) Spacing() int                            { return 0 }
+func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	styles := list.NewDefaultItemStyles()
+	tR := styles.NormalTitle.Render
+	dR := styles.NormalDesc.Render
+	if index == m.Index() {
+		tR = styles.SelectedTitle.Render
+		dR = styles.SelectedDesc.Render
+	}
+	switch li := listItem.(type) {
+	case ListItem:
+		title := li.Title()
+		desc := li.Description()
+		fmt.Fprintf(w, "%s\n%s", tR(title), dR(desc))
+	case feed.Feed:
+		title := li.Title()
+		desc := li.Description()
+		n := len(li.Items())
+		ur := 0
+		for _, i := range li.Items() {
+			if !i.IsRead() {
+				ur += 1
+			}
+		}
+		title = fmt.Sprintf("(%d/%d) %s", ur, n, title)
+		fmt.Fprintf(w, "%s\n%s", tR(title), dR(desc))
+	case feed.Item:
+		title := li.Title()
+		desc := li.Description()
+		if !li.IsRead() {
+			title = "(N) " + title
+		}
+		fmt.Fprintf(w, "%s\n%s", tR(title), dR(desc))
+	default:
+		return
+	}
+}
+
 func newMainModel(urls []string) mainModel {
 	w := 0
 	h := 0
@@ -51,9 +97,9 @@ func newMainModel(urls []string) mainModel {
 	for i, url := range urls {
 		fitems[i] = ListItem{title: url, description: "Loading..."}
 	}
-	allFeedList := list.New(fitems, list.NewDefaultDelegate(), w, h)
+	allFeedList := list.New(fitems, itemDelegate{}, w, h)
 	allFeedList.Title = "gross | feeds"
-	singleFeedList := list.New([]list.Item{}, list.NewDefaultDelegate(), w, h)
+	singleFeedList := list.New([]list.Item{}, itemDelegate{}, w, h)
 	return mainModel{
 		URLs:         urls,
 		fc:           make(chan feed.FeedMessage),
@@ -117,19 +163,59 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		// these keys quit the program
 		case "ctrl+c", "q":
+			for _, i := range m.allFeeds.Items() {
+				f, ok := i.(feed.Feed)
+				if ok {
+					feed.SaveFeed(f)
+				}
+			}
 			return m, tea.Quit
 			// these keys go back
-		case "h", "right":
+		case "h", "left":
 			switch m.state {
 			case allFeedsView:
+				for _, i := range m.allFeeds.Items() {
+					f, ok := i.(feed.Feed)
+					if ok {
+						feed.SaveFeed(f)
+					}
+				}
 				return m, tea.Quit
 			case singleFeedView:
 				m.state = allFeedsView
 			case singleItemView:
 				m.state = singleFeedView
 			}
+		case "r":
+			// toggle visible items
+			if m.state == singleFeedView {
+				m.showRead = !m.showRead
+				f := m.selectedFeed
+				listItems := make([]list.Item, 0)
+				for _, li := range f.Items() {
+					if m.showRead && li.IsRead() {
+						continue
+					}
+					listItems = append(listItems, li)
+				}
+				cmd = m.singleFeed.SetItems(listItems)
+				cmds = append(cmds, cmd)
+			}
+
+		case "A":
+			if m.state == singleFeedView {
+				for _, i := range m.selectedFeed.Items() {
+					i.SetRead(true)
+				}
+			}
+		case "a":
+			// toggle read state
+			i, ok := m.singleFeed.SelectedItem().(feed.Item)
+			if m.state == singleFeedView && ok {
+				i.SetRead(!i.IsRead())
+			}
+		case "l", "right", "enter":
 			// these keys select items
-		case "l", "left", "enter":
 			switch m.state {
 			case allFeedsView:
 				f, ok := m.allFeeds.SelectedItem().(feed.Feed)
@@ -147,10 +233,21 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case singleFeedView:
 				i, ok := m.singleFeed.SelectedItem().(feed.Item)
 				if ok {
+					i.SetRead(true)
 					m.selectedItem = i
 					m.singleItem.SetContent(formatContent(i, m.width))
 					m.state = singleItemView
 				}
+			case singleItemView:
+				if m.selectedItem != nil {
+					scmd := exec.Command(viper.GetString("browsercmd"), m.selectedItem.Link())
+					err := scmd.Run()
+					if err != nil {
+						m.singleItem.SetContent(wrap.String(fmt.Sprintf("%s\n", err), m.width))
+					}
+
+				}
+
 			}
 
 		}

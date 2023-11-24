@@ -2,56 +2,84 @@ package feed
 
 import (
 	"encoding/xml"
+	"fmt"
+	"html"
+	"strings"
 
 	"github.com/microcosm-cc/bluemonday"
 )
 
 var p = bluemonday.StrictPolicy()
 
+type HTMLContent struct {
+	Raw string `xml:",innerxml"`
+}
+
+func Escape(c HTMLContent) string {
+	return strings.TrimSpace(p.Sanitize(html.UnescapeString(c.Raw)))
+}
+
 type RSSItem struct {
-	XTitle       string `xml:"title"`
-	XDescription string `xml:"description"`
-	XLink        string `xml:"link"`
+	url          string
+	XTitle       string      `xml:"title"`
+	XDescription HTMLContent `xml:"description"`
+	XLink        string      `xml:"link"`
+	XRead        bool        `xml:"read"`
+}
+
+type AtomLink struct {
+	XMLName xml.Name `xml:"link"`
+	Href    string   `xml:"href,attr"`
+	Rel     string   `xml:"rel,attr"`
 }
 
 type AtomEntry struct {
-	XTitle   string `xml:"title"`
-	XLink    string `xml:"link"`
-	XSummary string `xml:"summary"`
-	XUpdated string `xml:"updated"`
-	XID      string `xml:"id"`
+	url      string
+	XTitle   string      `xml:"title"`
+	XLink    AtomLink    `xml:"link`
+	XSummary HTMLContent `xml:"summary"`
+	XContent HTMLContent `xml:"content"`
+	XUpdated string      `xml:"updated"`
+	XD       string      `xml:"id"`
+	XRead    bool        `xml:"read"`
 }
 
 type RSSChannel struct {
-	XTitle       string    `xml:"title"`
-	XDescription string    `xml:"description"`
-	XLink        string    `xml:"link"`
-	XItems       []RSSItem `xml:"item"`
+	XTitle       string     `xml:"title"`
+	XDescription string     `xml:"description"`
+	XLink        string     `xml:"link"`
+	XItems       []*RSSItem `xml:"item"`
 }
 
 type Atom struct {
-	XMLName  xml.Name    `xml:"feed"`
-	XTitle   string      `xml:"title"`
-	XLink    string      `xml:"link"`
-	XUpdated string      `xml:"updated"`
-	XID      string      `xml:"id"`
-	XEntries []AtomEntry `xml:"entry"`
+	url      string
+	XMLName  xml.Name     `xml:"feed"`
+	XTitle   string       `xml:"title"`
+	XLink    AtomLink     `xml:"link"`
+	XUpdated string       `xml:"updated"`
+	XD       string       `xml:"id"`
+	XEntries []*AtomEntry `xml:"entry"`
 }
 
 type RSS struct {
+	url      string
 	XMLName  xml.Name   `xml:"rss"`
 	XChannel RSSChannel `xml:"channel"`
 }
 
 type Item interface {
+	URL() string
 	FilterValue() string
 	Title() string
 	Description() string
 	Content() string
 	Link() string
+	IsRead() bool
+	SetRead(read bool)
 }
 
 type Feed interface {
+	URL() string
 	FilterValue() string
 	Title() string
 	Description() string
@@ -59,63 +87,105 @@ type Feed interface {
 	Items() []Item
 }
 
-func (i RSSItem) FilterValue() string {
+func (i *RSSItem) IsRead() bool {
+	return i.XRead
+}
+
+func (i *RSSItem) SetRead(read bool) {
+	i.XRead = read
+}
+
+func (i *RSSItem) URL() string {
+	return i.url
+}
+
+func (i *RSSItem) FilterValue() string {
 	return i.XTitle
 }
 
-func (i RSSItem) Title() string {
+func (i *RSSItem) Title() string {
 	return i.XTitle
 }
 
-func (i RSSItem) Description() string {
+func (i *RSSItem) Description() string {
 	return i.XLink
 }
 
-func (i RSSItem) Link() string {
-	return i.XLink
+func (i *RSSItem) Link() string {
+	link := i.XLink
+	if len(link) > 1 && strings.HasPrefix(link, "/") {
+		link = fmt.Sprintf("%s%s", i.url, link)
+	}
+	return link
 }
 
-func (i RSSItem) Content() string {
-	return p.Sanitize(i.XDescription)
+func (i *RSSItem) Content() string {
+	return Escape(i.XDescription)
 }
 
-func (a AtomEntry) FilterValue() string {
+func (a *AtomEntry) IsRead() bool {
+	return a.XRead
+}
+
+func (a *AtomEntry) SetRead(read bool) {
+	a.XRead = read
+}
+
+func (a *AtomEntry) URL() string {
+	return a.url
+}
+
+func (a *AtomEntry) FilterValue() string {
 	return a.XTitle
 }
 
-func (a AtomEntry) Title() string {
+func (a *AtomEntry) Title() string {
 	return a.XTitle
 }
 
-func (a AtomEntry) Link() string {
-	return a.XLink
+func (a *AtomEntry) Link() string {
+	if a.XLink.Href != "" && a.XLink.Rel == "alternate" {
+		link := a.XLink.Href
+		if len(link) > 1 && strings.HasPrefix(link, "/") {
+			link = fmt.Sprintf("%s%s", a.url, link)
+		}
+		return link
+	}
+	return a.XD
 }
 
-func (a AtomEntry) Description() string {
-	return a.XLink
+func (a *AtomEntry) Description() string {
+	return a.Link()
 }
 
-func (a AtomEntry) Content() string {
-	return p.Sanitize(a.XSummary)
+func (a *AtomEntry) Content() string {
+	if a.XContent.Raw != "" {
+		return Escape(a.XContent)
+	}
+	return Escape(a.XSummary)
 }
 
-func (r RSS) FilterValue() string {
+func (r *RSS) URL() string {
+	return r.url
+}
+
+func (r *RSS) FilterValue() string {
 	return r.XChannel.XTitle
 }
 
-func (r RSS) Title() string {
+func (r *RSS) Title() string {
 	return r.XChannel.XTitle
 }
 
-func (r RSS) Description() string {
+func (r *RSS) Description() string {
 	return r.XChannel.XDescription
 }
 
-func (r RSS) Link() string {
+func (r *RSS) Link() string {
 	return r.XChannel.XLink
 }
 
-func (r RSS) Items() []Item {
+func (r *RSS) Items() []Item {
 	items := make([]Item, len(r.XChannel.XItems))
 	for i, e := range r.XChannel.XItems {
 		items[i] = e
@@ -123,23 +193,30 @@ func (r RSS) Items() []Item {
 	return items
 }
 
-func (a Atom) FilterValue() string {
+func (a *Atom) URL() string {
+	return a.url
+}
+
+func (a *Atom) FilterValue() string {
 	return a.XTitle
 }
 
-func (a Atom) Title() string {
+func (a *Atom) Title() string {
 	return a.XTitle
 }
 
-func (a Atom) Description() string {
+func (a *Atom) Description() string {
 	return a.XTitle
 }
 
-func (a Atom) Link() string {
-	return a.XLink
+func (a *Atom) Link() string {
+	if a.XLink.Href != "" && a.XLink.Rel == "alternate" {
+		return a.XLink.Href
+	}
+	return a.XD
 }
 
-func (a Atom) Items() []Item {
+func (a *Atom) Items() []Item {
 	items := make([]Item, len(a.XEntries))
 	for i, e := range a.XEntries {
 		items[i] = e
