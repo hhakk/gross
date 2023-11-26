@@ -16,7 +16,11 @@ type HTMLContent struct {
 }
 
 func Escape(c HTMLContent) string {
-	return strings.TrimSpace(p.Sanitize(html.UnescapeString(c.Raw)))
+	return strings.TrimSpace(
+			p.Sanitize(
+				html.UnescapeString(c.Raw),
+			),
+		)
 }
 
 type RSSItem struct {
@@ -59,12 +63,14 @@ type Atom struct {
 	XUpdated string       `xml:"updated"`
 	XD       string       `xml:"id"`
 	XEntries []*AtomEntry `xml:"entry"`
+	AltTitle string
 }
 
 type RSS struct {
 	url      string
 	XMLName  xml.Name   `xml:"rss"`
 	XChannel RSSChannel `xml:"channel"`
+	AltTitle string
 }
 
 type Item interface {
@@ -85,6 +91,7 @@ type Feed interface {
 	Description() string
 	Link() string
 	Items() []Item
+	SetTitle(t string)
 }
 
 func (i *RSSItem) IsRead() bool {
@@ -173,7 +180,14 @@ func (r *RSS) FilterValue() string {
 	return r.XChannel.XTitle
 }
 
+func (r *RSS) SetTitle(t string) {
+	r.AltTitle = t
+}
+
 func (r *RSS) Title() string {
+	if r.AltTitle != "" {
+		return r.AltTitle
+	}
 	return r.XChannel.XTitle
 }
 
@@ -201,7 +215,14 @@ func (a *Atom) FilterValue() string {
 	return a.XTitle
 }
 
+func (a *Atom) SetTitle(t string) {
+	a.AltTitle = t
+}
+
 func (a *Atom) Title() string {
+	if a.AltTitle != "" {
+		return a.AltTitle
+	}
 	return a.XTitle
 }
 

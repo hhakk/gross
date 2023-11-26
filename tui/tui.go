@@ -26,7 +26,7 @@ const (
 )
 
 type mainModel struct {
-	URLs         []string
+	URLs         []feed.FeedSpec
 	fc           chan feed.FeedMessage
 	state        sessionState
 	allFeeds     list.Model
@@ -47,6 +47,8 @@ type ListItem struct {
 func (l ListItem) FilterValue() string { return l.title }
 func (l ListItem) Title() string       { return l.title }
 func (l ListItem) Description() string { return l.description }
+
+var unreadStyle = lipgloss.NewStyle().Inline(true).Bold(true).Foreground(lipgloss.Color("#fe4d93"))
 
 type itemDelegate struct{}
 
@@ -76,13 +78,14 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 				ur += 1
 			}
 		}
-		title = fmt.Sprintf("(%d/%d) %s", ur, n, title)
+		unread := unreadStyle.Render(fmt.Sprintf("(%d/%d)", ur, n))
+		title = fmt.Sprintf("%s %s", unread, title)
 		fmt.Fprintf(w, "%s\n%s", tR(title), dR(desc))
 	case feed.Item:
 		title := li.Title()
 		desc := li.Description()
 		if !li.IsRead() {
-			title = "(N) " + title
+			title = unreadStyle.Render("(N) ") + title
 		}
 		fmt.Fprintf(w, "%s\n%s", tR(title), dR(desc))
 	default:
@@ -90,12 +93,16 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	}
 }
 
-func newMainModel(urls []string) mainModel {
+func newMainModel(urls []feed.FeedSpec) mainModel {
 	w := 0
 	h := 0
 	fitems := make([]list.Item, len(urls))
 	for i, url := range urls {
-		fitems[i] = ListItem{title: url, description: "Loading..."}
+		title := url.URL
+		if url.AltName != "" {
+			title = url.AltName
+		}
+		fitems[i] = ListItem{title: title, description: "Loading..."}
 	}
 	allFeedList := list.New(fitems, itemDelegate{}, w, h)
 	allFeedList.Title = "gross | feeds"
@@ -272,7 +279,7 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = m.allFeeds.SetItem(
 				msg.Index,
 				ListItem{
-					title:       "Error",
+					title:       msg.URL,
 					description: fmt.Sprintf("Error: %s", msg.Error),
 				},
 			)
@@ -297,7 +304,7 @@ func (m mainModel) View() string {
 	return ""
 }
 
-func Run(urls []string) error {
+func Run(urls []feed.FeedSpec) error {
 	m := newMainModel(urls)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {

@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"bytes"
 	"bufio"
 	"crypto/md5"
 	"encoding/xml"
@@ -9,14 +10,22 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/net/html/charset"
 	"github.com/spf13/viper"
 )
 
-func GetURLs(urlfile string) ([]string, error) {
-	feeds := make([]string, 0)
+type FeedSpec struct {
+	URL string
+	Cmd string
+	AltName string
+}
+
+func GetURLs(urlfile string) ([]FeedSpec, error) {
+	feeds := make([]FeedSpec, 0)
 	f, err := os.Open(urlfile)
 	if err != nil {
 		return feeds, err
@@ -24,7 +33,27 @@ func GetURLs(urlfile string) ([]string, error) {
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		feeds = append(feeds, strings.TrimSpace(scanner.Text()))
+		base := strings.SplitN(strings.TrimSpace(scanner.Text()), " ", 2)
+		if base[0] == "" { continue }
+		fs := FeedSpec{}
+		for i, arg := range base {
+			if i == 0 {
+				// handle cmd like filter:cmd:url 
+				_, cmdurl, ok := strings.Cut(arg, "filter:")
+				if ok {
+					cmd, url, ok := strings.Cut(cmdurl, ":")
+					if ok {
+						fs.Cmd = cmd
+						fs.URL = url
+						continue
+					}
+				}
+				fs.URL = arg
+				continue
+			}
+			fs.AltName = strings.ReplaceAll(arg, "\"", "")
+		}
+		feeds = append(feeds, fs)
 	}
 	if err := scanner.Err(); err != nil {
 		return feeds, err
@@ -58,9 +87,9 @@ func SaveFeed(feed Feed) error {
 	return nil
 }
 
-func getOldFeed(url string) (Feed, error) {
+func getOldFeed(url FeedSpec) (Feed, error) {
 	// check previous feed
-	oldfp := filepath.Join(viper.GetString("cachedir"), fmt.Sprintf("%x", md5.Sum([]byte(url))))
+	oldfp := filepath.Join(viper.GetString("cachedir"), fmt.Sprintf("%x", md5.Sum([]byte(url.URL))))
 	oldb, err := os.ReadFile(oldfp)
 	if err != nil {
 		return nil, err
@@ -68,27 +97,55 @@ func getOldFeed(url string) (Feed, error) {
 	return parseFeed(oldb, url)
 }
 
-func parseFeed(b []byte, url string) (Feed, error) {
+func parseFeed(b []byte, url FeedSpec) (Feed, error) {
 
-	baseurl, err := neturl.Parse(url)
+	baseurl, err := neturl.Parse(url.URL)
 	if err != nil {
 		return nil, err
 	}
+	if url.Cmd != "" {
+		cmd := exec.Command(url.Cmd)
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return nil, err
+		}
+		go func() {
+			defer stdin.Close()
+			io.WriteString(stdin, string(b))
+		}()
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, err
+		}
+		b = []byte(out)
+	}
 	var feedR RSS
-	err = xml.Unmarshal(b, &feedR)
+	reader := bytes.NewReader(b)
+	decoder := xml.NewDecoder(reader)
+	decoder.CharsetReader = charset.NewReaderLabel
+	err = decoder.Decode(&feedR)
 	if err == nil {
-		feedR.url = url
+		feedR.url = url.URL
 		for i := range feedR.XChannel.XItems {
 			feedR.XChannel.XItems[i].url = fmt.Sprintf("%s://%s", baseurl.Scheme, baseurl.Host)
+		}
+		if url.AltName != "" {
+			feedR.AltTitle = url.AltName
 		}
 		return &feedR, nil
 	}
 	var feedA Atom
-	err = xml.Unmarshal(b, &feedA)
-	if err == nil {
-		feedA.url = url
+	reader = bytes.NewReader(b)
+	decoder = xml.NewDecoder(reader)
+	decoder.CharsetReader = charset.NewReaderLabel
+	err2 := decoder.Decode(&feedA)
+	if err2 == nil {
+		feedA.url = url.URL
 		for i := range feedA.XEntries {
 			feedA.XEntries[i].url = fmt.Sprintf("%s://%s", baseurl.Scheme, baseurl.Host)
+		}
+		if url.AltName != "" {
+			feedA.AltTitle = url.AltName
 		}
 		return &feedA, nil
 	}
@@ -113,15 +170,15 @@ func getRemoteFeed(url string) ([]byte, error) {
 	return body, nil
 }
 
-func processFeed(url string, index int, c chan FeedMessage) {
-	b, err := getRemoteFeed(url)
+func processFeed(url FeedSpec, index int, c chan FeedMessage) {
+	b, err := getRemoteFeed(url.URL)
 	if err != nil {
-		c <- FeedMessage{Feed: nil, Error: err, Index: index}
+		c <- FeedMessage{Feed: nil, Error: err, Index: index, URL: url.URL}
 		return
 	}
 	f, err := parseFeed(b, url)
 	if err != nil {
-		c <- FeedMessage{Feed: nil, Error: err, Index: index}
+		c <- FeedMessage{Feed: nil, Error: err, Index: index, URL: url.URL}
 		return
 	}
 	oldf, err := getOldFeed(url)
@@ -139,7 +196,7 @@ func processFeed(url string, index int, c chan FeedMessage) {
 		}
 
 	}
-	c <- FeedMessage{Feed: &f, Error: nil, Index: index}
+	c <- FeedMessage{Feed: &f, Error: nil, Index: index, URL: url.URL}
 	return
 }
 
@@ -147,9 +204,10 @@ type FeedMessage struct {
 	Feed  *Feed
 	Error error
 	Index int
+	URL string
 }
 
-func GetFeeds(urls []string, c chan FeedMessage) {
+func GetFeeds(urls []FeedSpec, c chan FeedMessage) {
 	for i, url := range urls {
 		go processFeed(url, i, c)
 	}
