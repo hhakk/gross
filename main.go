@@ -33,8 +33,7 @@ func main() {
 		fmt.Println("error reading cache directory")
 		os.Exit(1)
 	}
-	browser, ok := os.LookupEnv("$BROWSER")
-	fmt.Println(browser)
+	browser, ok := os.LookupEnv("BROWSER")
 	if !ok {
 		browser = "firefox"
 	}

@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-var docStyle = lipgloss.NewStyle().Margin(4, 8)
+var docStyle = lipgloss.NewStyle().Margin(4, 2)
 
 type sessionState uint
 
@@ -26,6 +26,7 @@ const (
 )
 
 type mainModel struct {
+	title        string
 	URLs         []feed.FeedSpec
 	fc           chan feed.FeedMessage
 	state        sessionState
@@ -93,6 +94,11 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	}
 }
 
+func renderTitle(title string) string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("#fe4d93")).Padding(0, 4).Margin(1, 1)
+	return titleStyle.Render(fmt.Sprintf("gross | %s", title))
+}
+
 func newMainModel(urls []feed.FeedSpec) mainModel {
 	w := 0
 	h := 0
@@ -105,9 +111,20 @@ func newMainModel(urls []feed.FeedSpec) mainModel {
 		fitems[i] = ListItem{title: title, description: "Loading..."}
 	}
 	allFeedList := list.New(fitems, itemDelegate{}, w, h)
-	allFeedList.Title = "gross | feeds"
+	allFeedList.SetShowTitle(false)
+	allFeedList.SetShowHelp(false)
+	allFeedList.SetFilteringEnabled(false)
+	allFeedList.SetShowFilter(false)
+	allFeedList.SetShowStatusBar(false)
+
 	singleFeedList := list.New([]list.Item{}, itemDelegate{}, w, h)
+	singleFeedList.SetShowTitle(false)
+	singleFeedList.SetShowHelp(false)
+	singleFeedList.SetFilteringEnabled(false)
+	singleFeedList.SetShowFilter(false)
+	singleFeedList.SetShowStatusBar(false)
 	return mainModel{
+		title:        "feeds",
 		URLs:         urls,
 		fc:           make(chan feed.FeedMessage),
 		state:        allFeedsView,
@@ -136,8 +153,7 @@ func (m mainModel) Init() tea.Cmd {
 
 func formatContent(item feed.Item, width int) string {
 	ls := list.DefaultStyles()
-	return fmt.Sprintf("%s\n\n%s\n\n%s",
-		ls.Title.Render(fmt.Sprintf("gross | %s", item.Title())),
+	return fmt.Sprintf("%s\n\n%s",
 		ls.StatusBar.Render(
 			wrap.String(
 				fmt.Sprintf("Link: %s", item.Link()),
@@ -153,12 +169,14 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	width := 0
 	height := 0
+	isSwitching := false
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		h, v := docStyle.GetFrameSize()
+		headHeight := lipgloss.Height(renderTitle(m.title))
 		width = msg.Width - h
 		m.width = width
-		height = msg.Height - v
+		height = msg.Height - v - headHeight
 		m.allFeeds.SetSize(width, height)
 		m.singleFeed.SetSize(width, height)
 		m.singleItem.Width = width
@@ -189,8 +207,12 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.Quit
 			case singleFeedView:
+				isSwitching = true
+				m.title = "feeds"
 				m.state = allFeedsView
 			case singleItemView:
+				isSwitching = true
+				m.title = m.selectedFeed.Title()
 				m.state = singleFeedView
 			}
 		case "r":
@@ -227,7 +249,6 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case allFeedsView:
 				f, ok := m.allFeeds.SelectedItem().(feed.Feed)
 				if ok {
-					m.singleFeed.Title = fmt.Sprintf("gross | %s", f.Title())
 					m.selectedFeed = f
 					listItems := make([]list.Item, len(f.Items()))
 					for ix, li := range f.Items() {
@@ -235,7 +256,9 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					cmd = m.singleFeed.SetItems(listItems)
 					cmds = append(cmds, cmd)
+					m.title = m.selectedFeed.Title()
 					m.state = singleFeedView
+					isSwitching = true
 				}
 			case singleFeedView:
 				i, ok := m.singleFeed.SelectedItem().(feed.Item)
@@ -243,7 +266,9 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					i.SetRead(true)
 					m.selectedItem = i
 					m.singleItem.SetContent(formatContent(i, m.width))
+					m.title = m.selectedItem.Title()
 					m.state = singleItemView
+					isSwitching = true
 				}
 			case singleItemView:
 				if m.selectedItem != nil {
@@ -258,17 +283,19 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		}
-		// handle other keypresses accordingly
-		switch m.state {
-		case allFeedsView:
-			m.allFeeds, cmd = m.allFeeds.Update(msg)
-			cmds = append(cmds, cmd)
-		case singleFeedView:
-			m.singleFeed, cmd = m.singleFeed.Update(msg)
-			cmds = append(cmds, cmd)
-		case singleItemView:
-			m.singleItem, cmd = m.singleItem.Update(msg)
-			cmds = append(cmds, cmd)
+		if !isSwitching {
+			// handle other keypresses accordingly
+			switch m.state {
+			case allFeedsView:
+				m.allFeeds, cmd = m.allFeeds.Update(msg)
+				cmds = append(cmds, cmd)
+			case singleFeedView:
+				m.singleFeed, cmd = m.singleFeed.Update(msg)
+				cmds = append(cmds, cmd)
+			case singleItemView:
+				m.singleItem, cmd = m.singleItem.Update(msg)
+				cmds = append(cmds, cmd)
+			}
 		}
 		// we receive a new feed
 	case feedLoadedMsg:
@@ -293,15 +320,17 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m mainModel) View() string {
+	content := ""
+	title := renderTitle(m.title)
 	switch m.state {
 	case allFeedsView:
-		return m.allFeeds.View()
+		content = m.allFeeds.View()
 	case singleFeedView:
-		return m.singleFeed.View()
+		content = m.singleFeed.View()
 	case singleItemView:
-		return m.singleItem.View()
+		content = m.singleItem.View()
 	}
-	return ""
+	return fmt.Sprintf("%s\n%s", title, content)
 }
 
 func Run(urls []feed.FeedSpec) error {

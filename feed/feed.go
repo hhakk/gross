@@ -1,8 +1,8 @@
 package feed
 
 import (
-	"bytes"
 	"bufio"
+	"bytes"
 	"crypto/md5"
 	"encoding/xml"
 	"fmt"
@@ -14,13 +14,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/net/html/charset"
 	"github.com/spf13/viper"
+	"golang.org/x/net/html/charset"
 )
 
 type FeedSpec struct {
-	URL string
-	Cmd string
+	URL     string
+	Cmd     string
 	AltName string
 }
 
@@ -34,11 +34,13 @@ func GetURLs(urlfile string) ([]FeedSpec, error) {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		base := strings.SplitN(strings.TrimSpace(scanner.Text()), " ", 2)
-		if base[0] == "" { continue }
+		if base[0] == "" {
+			continue
+		}
 		fs := FeedSpec{}
 		for i, arg := range base {
 			if i == 0 {
-				// handle cmd like filter:cmd:url 
+				// handle cmd like filter:cmd:url
 				_, cmdurl, ok := strings.Cut(arg, "filter:")
 				if ok {
 					cmd, url, ok := strings.Cut(cmdurl, ":")
@@ -120,6 +122,8 @@ func parseFeed(b []byte, url FeedSpec) (Feed, error) {
 		b = []byte(out)
 	}
 	var feedR RSS
+	// we cannot use xml.Unmarshal
+	// on non-UTF-8 -encoded feeds
 	reader := bytes.NewReader(b)
 	decoder := xml.NewDecoder(reader)
 	decoder.CharsetReader = charset.NewReaderLabel
@@ -184,6 +188,8 @@ func processFeed(url FeedSpec, index int, c chan FeedMessage) {
 	oldf, err := getOldFeed(url)
 	if err == nil {
 		for _, old := range oldf.Items() {
+			// highly inefficient, we could do better
+			// with a map
 			for _, cur := range f.Items() {
 				if old.Title() == cur.Title() &&
 					old.Description() == cur.Description() &&
@@ -204,7 +210,7 @@ type FeedMessage struct {
 	Feed  *Feed
 	Error error
 	Index int
-	URL string
+	URL   string
 }
 
 func GetFeeds(urls []FeedSpec, c chan FeedMessage) {
