@@ -1,5 +1,7 @@
 # 📰 gross
 
+![gross](gross.gif)
+
 terminal RSS reader written in Go
 
 ## Features
